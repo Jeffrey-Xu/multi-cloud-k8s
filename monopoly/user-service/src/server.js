@@ -6,6 +6,7 @@ const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const healthRoutes = require('./routes/health');
 
+// User Service - Fixed health check rate limiting issue
 const app = express();
 const PORT = process.env.PORT || 3002;
 
