@@ -84,26 +84,3 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-west-2
-
-      - name: Deploy to EKS
-        run: |
-          NEW_TAG="main-${{ github.sha }}"
-          aws eks update-kubeconfig --region us-west-2 --name monopoly-dev-jxre
-          kubectl set image deployment/matchmaking-service matchmaking-service=${{ env.IMAGE_NAME }}:${NEW_TAG} -n monopoly-game
-          kubectl rollout status deployment/matchmaking-service -n monopoly-game --timeout=300s
