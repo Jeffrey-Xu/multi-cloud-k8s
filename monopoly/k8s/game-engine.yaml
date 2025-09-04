@@ -1,0 +1,126 @@
+# Game Engine Deployment - Hybrid approach: Terraform IAM + K8s dynamic provisioning
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: game-engine
+  namespace: monopoly-game
+  labels:
+    app: game-engine
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: game-engine
+  template:
+    metadata:
+      labels:
+        app: game-engine
+    spec:
+      containers:
+      - name: game-engine
+        image: jeffreyxu2025/monopoly-game-engine:latest
+        ports:
+        - containerPort: 3001
+        env:
+        - name: PORT
+          value: "3001"
+        - name: NODE_ENV
+          value: "development"
+        # Database connection from Terraform-managed RDS
+        - name: DB_HOST
+          value: "TERRAFORM_RDS_ENDPOINT"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          value: "monopoly_game"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: password
+        # Redis connection from Terraform-managed ElastiCache
+        - name: REDIS_HOST
+          value: "TERRAFORM_REDIS_ENDPOINT"
+        - name: REDIS_PORT
+          value: "6379"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3001
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        # Use dynamic EBS provisioning (Terraform manages StorageClass + IAM)
+        volumeMounts:
+        - name: game-data
+          mountPath: /app/data
+        - name: logs
+          mountPath: /app/logs
+      volumes:
+      - name: game-data
+        persistentVolumeClaim:
+          claimName: game-data-pvc
+      - name: logs
+        persistentVolumeClaim:
+          claimName: logs-pvc
+---
+# Service - ClusterIP, exposed via Ingress
+apiVersion: v1
+kind: Service
+metadata:
+  name: game-engine-service
+  namespace: monopoly-game
+  labels:
+    app: game-engine
+spec:
+  type: ClusterIP
+  ports:
+  - port: 3001
+    targetPort: 3001
+    protocol: TCP
+  selector:
+    app: game-engine
+---
+# Dynamic EBS Provisioning - Uses Terraform-managed StorageClass
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: game-data-pvc
+  namespace: monopoly-game
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp3  # Terraform-managed StorageClass
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: logs-pvc
+  namespace: monopoly-game
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp3  # Terraform-managed StorageClass
+  resources:
+    requests:
+      storage: 5Gi

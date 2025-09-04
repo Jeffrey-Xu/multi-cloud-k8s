@@ -1,0 +1,16 @@
+
+# Terraform
+**/.terraform/
+**/.terraform.lock.hcl
+**/terraform.tfstate*
+**/.terraform.tfstate.lock.info
+
+# Node.js
+**/node_modules/
+**/*.node
+
+# Large binaries
+**/terraform-provider-*
+
+# OS files
+**/.DS_Store

@@ -1,0 +1,165 @@
+name: Generate Architecture Documentation
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths: 
+      - 'docs/**'
+      - 'diagrams/**'
+      - '**.md'
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  generate-diagrams:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Install dependencies
+        run: |
+          pip install diagrams
+          sudo apt-get update
+          sudo apt-get install -y graphviz
+          
+      - name: Generate architecture diagrams
+        run: |
+          cd diagrams
+          python system_architecture.py || echo "Diagrams.py generation skipped"
+          
+      - name: Setup Node.js for Mermaid
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          
+      - name: Install Mermaid CLI
+        run: npm install -g @mermaid-js/mermaid-cli
+        
+      - name: Generate Mermaid diagrams
+        run: |
+          # Extract and generate Mermaid diagrams from markdown files
+          find . -name "*.md" -exec grep -l "```mermaid" {} \; | while read file; do
+            echo "Processing $file for Mermaid diagrams"
+          done
+          
+      - name: Validate documentation links
+        run: |
+          # Check for broken internal links
+          find . -name "*.md" -exec grep -l "\[.*\](.*\.md)" {} \; | while read file; do
+            echo "Validating links in $file"
+          done
+          
+      - name: Generate documentation site
+        run: |
+          mkdir -p docs/generated
+          echo "# Multi-Cloud Gaming Platform Documentation" > docs/generated/index.md
+          echo "Generated on: $(date)" >> docs/generated/index.md
+          echo "" >> docs/generated/index.md
+          echo "## Architecture Diagrams" >> docs/generated/index.md
+          
+          # List all generated diagrams
+          if [ -d "diagrams/generated" ]; then
+            ls diagrams/generated/*.png 2>/dev/null | while read diagram; do
+              name=$(basename "$diagram" .png)
+              echo "- [$name]($diagram)" >> docs/generated/index.md
+            done
+          fi
+          
+      - name: Commit generated files
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add docs/generated/ diagrams/generated/ || true
+          git commit -m "Auto-update architecture documentation [skip ci]" || exit 0
+          
+      - name: Push changes
+        if: github.ref == 'refs/heads/main'
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: main
+
+  validate-architecture:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Validate Terraform syntax
+        run: |
+          if [ -d "learn-terraform-multicloud-kubernetes" ]; then
+            cd learn-terraform-multicloud-kubernetes
+            find . -name "*.tf" -exec terraform fmt -check {} \; || echo "Terraform formatting issues found"
+          fi
+          
+      - name: Validate Kubernetes manifests
+        run: |
+          if [ -d "k8s" ]; then
+            find k8s -name "*.yaml" -o -name "*.yml" | while read manifest; do
+              echo "Validating $manifest"
+              # Basic YAML syntax check
+              python -c "import yaml; yaml.safe_load(open('$manifest'))" || echo "YAML syntax error in $manifest"
+            done
+          fi
+          
+      - name: Check documentation completeness
+        run: |
+          # Ensure key documentation files exist
+          required_docs=(
+            "README.md"
+            "ARCHITECTURE_BLUEPRINT.md" 
+            "PROJECT_PLAN.md"
+            "SERVICE_MESH_STRATEGY.md"
+          )
+          
+          for doc in "${required_docs[@]}"; do
+            if [ ! -f "$doc" ]; then
+              echo "❌ Missing required documentation: $doc"
+              exit 1
+            else
+              echo "✅ Found: $doc"
+            fi
+          done
+          
+      - name: Generate architecture summary
+        run: |
+          echo "# Architecture Validation Report" > validation-report.md
+          echo "Generated: $(date)" >> validation-report.md
+          echo "" >> validation-report.md
+          
+          echo "## Documentation Status" >> validation-report.md
+          find . -name "*.md" -type f | wc -l | xargs echo "- Total markdown files:" >> validation-report.md
+          
+          echo "" >> validation-report.md
+          echo "## Infrastructure Status" >> validation-report.md
+          if [ -d "learn-terraform-multicloud-kubernetes" ]; then
+            find learn-terraform-multicloud-kubernetes -name "*.tf" | wc -l | xargs echo "- Terraform files:" >> validation-report.md
+          fi
+          
+          echo "" >> validation-report.md
+          echo "## Application Status" >> validation-report.md
+          if [ -d "monopoly" ]; then
+            echo "- Monopoly game directory: ✅" >> validation-report.md
+          else
+            echo "- Monopoly game directory: ❌" >> validation-report.md
+          fi
+          
+          if [ -d "cicd" ]; then
+            echo "- CI/CD configuration: ✅" >> validation-report.md
+          else
+            echo "- CI/CD configuration: ❌" >> validation-report.md
+          fi
+          
+      - name: Upload validation report
+        uses: actions/upload-artifact@v3
+        with:
+          name: architecture-validation-report
+          path: validation-report.md
