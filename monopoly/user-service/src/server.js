@@ -8,6 +8,7 @@ const healthRoutes = require('./routes/health');
 
 // User Service - Fixed health check rate limiting issue
 // Version: 1.1 - Health checks now bypass rate limiting
+// Build: Trigger new CI pipeline based on working monopoly-ci.yml
 const app = express();
 const PORT = process.env.PORT || 3002;
 
