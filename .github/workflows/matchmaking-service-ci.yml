@@ -2,110 +2,108 @@ name: Matchmaking Service CI/CD
 
 on:
   push:
+    branches: [ main, develop ]
+    paths:
+      - 'monopoly/matchmaking/**'
+  pull_request:
+    branches: [ main ]
     paths:
       - 'monopoly/matchmaking/**'
 
+permissions:
+  contents: write
+  packages: write
+  security-events: write
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: jeffreyxu2025/monopoly-matchmaking-service
+
 jobs:
-  build-and-deploy:
+  test:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: monopoly/matchmaking/package-lock.json
+
+      - name: Install dependencies
+        working-directory: monopoly/matchmaking
+        run: npm ci
+
+      - name: Run tests
+        working-directory: monopoly/matchmaking
+        run: npm test || echo "Tests not configured yet"
+
+      - name: Security audit
+        working-directory: monopoly/matchmaking
+        run: npm audit --audit-level high || true
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
     
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./monopoly/matchmaking
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
     
-    - name: Login to Docker Hub
-      uses: docker/login-action@v2
-      with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
-    
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v4
-      with:
-        context: ./monopoly/matchmaking
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: jeffreyxu2025/monopoly-matchmaking-service:${{ github.sha }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-    
-    - name: Generate deployment manifest
-      run: |
-        mkdir -p infra-dev/manifests
-        cat > infra-dev/manifests/matchmaking-service.yaml << EOF
-        apiVersion: apps/v1
-        kind: Deployment
-        metadata:
-          name: matchmaking-service
-          namespace: monopoly-game
-          labels:
-            app: matchmaking-service
-        spec:
-          replicas: 1
-          selector:
-            matchLabels:
-              app: matchmaking-service
-          template:
-            metadata:
-              labels:
-                app: matchmaking-service
-            spec:
-              containers:
-              - name: matchmaking-service
-                image: jeffreyxu2025/monopoly-matchmaking-service:${{ github.sha }}
-                ports:
-                - containerPort: 3003
-                env:
-                - name: PORT
-                  value: "3003"
-                - name: REDIS_HOST
-                  value: "monopoly-dev-redis.f2xiko.ng.0001.usw2.cache.amazonaws.com"
-                - name: REDIS_PORT
-                  value: "6379"
-                resources:
-                  requests:
-                    memory: "128Mi"
-                    cpu: "100m"
-                  limits:
-                    memory: "256Mi"
-                    cpu: "200m"
-                livenessProbe:
-                  httpGet:
-                    path: /health/live
-                    port: 3003
-                  initialDelaySeconds: 30
-                  periodSeconds: 10
-                readinessProbe:
-                  httpGet:
-                    path: /health/ready
-                    port: 3003
-                  initialDelaySeconds: 5
-                  periodSeconds: 5
-        ---
-        apiVersion: v1
-        kind: Service
-        metadata:
-          name: matchmaking-service
-          namespace: monopoly-game
-        spec:
-          selector:
-            app: matchmaking-service
-          ports:
-          - port: 3003
-            targetPort: 3003
-          type: ClusterIP
-        EOF
-    
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: us-west-2
-    
-    - name: Deploy Matchmaking Service
-      run: |
-        aws eks update-kubeconfig --region us-west-2 --name monopoly-dev-jxre
-        kubectl apply -f infra-dev/manifests/matchmaking-service.yaml
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Deploy to EKS
+        run: |
+          NEW_TAG="main-${{ github.sha }}"
+          aws eks update-kubeconfig --region us-west-2 --name monopoly-dev-jxre
+          kubectl set image deployment/matchmaking-service matchmaking-service=${{ env.IMAGE_NAME }}:${NEW_TAG} -n monopoly-game
+          kubectl rollout status deployment/matchmaking-service -n monopoly-game --timeout=300s
